@@ -1,5 +1,20 @@
 ThisBuild / organization := "com.pcpitman"
-ThisBuild / version      := "0.1.0-SNAPSHOT"
+ThisBuild / version := {
+  import scala.sys.process._
+  val branch = "git rev-parse --abbrev-ref HEAD".!!.trim
+  val commitTag = scala.util.Try("git describe --tags --exact-match HEAD".!!.trim).toOption
+  val lastTag = scala.util.Try("git describe --tags --abbrev=0".!!.trim).toOption
+  val commit = "git rev-parse HEAD".!!.trim.take(8)
+  val timestamp = {
+    val fmt = new java.text.SimpleDateFormat("yyyyMMddHHmmss")
+    fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"))
+    fmt.format(new java.util.Date())
+  }
+  val base = lastTag.getOrElse("0.0.0")
+  if (branch == "main" && commitTag.isDefined) commitTag.get
+  else if (branch == "main") s"${base}-${timestamp}-${commit}"
+  else s"${base}-${branch}-${timestamp}-${commit}"
+}
 
 lazy val root = (project in file("."))
   .aggregate(dynamodb, ses, s3)
