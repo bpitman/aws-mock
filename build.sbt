@@ -23,7 +23,7 @@ ThisBuild / version := {
 }
 
 lazy val root = (project in file("."))
-  .aggregate(dynamodb, ses, s3)
+  .aggregate(dynamodb, kms, ses, s3)
   .settings(
     name := "aws-mock",
     publish / skip := true
@@ -51,6 +51,15 @@ lazy val dynamodb = (project in file("dynamodb"))
     name := "aws-mock-dynamodb",
     libraryDependencies ++= Seq(
       Dependencies.aws2DynamoDB
+    )
+  )
+
+lazy val kms = (project in file("kms"))
+  .settings(commonSettings)
+  .settings(
+    name := "aws-mock-kms",
+    libraryDependencies ++= Seq(
+      Dependencies.aws2KMS
     )
   )
 

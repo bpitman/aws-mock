@@ -12,6 +12,7 @@ object Dependencies {
   import Versions._
 
   val aws2DynamoDB   = "software.amazon.awssdk"       % "dynamodb"           % aws2
+  val aws2KMS        = "software.amazon.awssdk"       % "kms"                % aws2
   val aws2S3         = "software.amazon.awssdk"       % "s3"                 % aws2
   val aws2SES        = "software.amazon.awssdk"       % "ses"                % aws2
   val log4jApi       = "org.apache.logging.log4j"     % "log4j-api"          % log4j
