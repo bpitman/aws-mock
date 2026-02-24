@@ -1,9 +1,15 @@
 ThisBuild / organization := "com.pcpitman"
 ThisBuild / version := {
   import scala.sys.process._
+  def gitSilent(cmd: String): Option[String] = {
+    val out = new StringBuilder
+    val logger = ProcessLogger(s => out.append(s), _ => ())
+    val exitCode = cmd.!(logger)
+    if (exitCode == 0) Some(out.toString.trim) else None
+  }
   val branch = "git rev-parse --abbrev-ref HEAD".!!.trim
-  val commitTag = scala.util.Try("git describe --tags --exact-match HEAD".!!.trim).toOption
-  val lastTag = scala.util.Try("git describe --tags --abbrev=0".!!.trim).toOption
+  val commitTag = gitSilent("git describe --tags --exact-match HEAD")
+  val lastTag = gitSilent("git describe --tags --abbrev=0")
   val commit = "git rev-parse HEAD".!!.trim.take(8)
   val timestamp = {
     val fmt = new java.text.SimpleDateFormat("yyyyMMddHHmmss")
