@@ -32,7 +32,8 @@ lazy val root = (project in file("."))
 lazy val commonSettings = Seq(
   scalaVersion := "3.8.1",
   crossScalaVersions := Seq("2.13.18", "3.8.1"),
-  scalacOptions ++= Seq("-deprecation", "-unchecked", "-feature"),
+  scalacOptions ++= Seq("-deprecation", "-unchecked", "-feature") ++
+    (if (scalaVersion.value.startsWith("3")) Seq("-Wconf:msg=vararg splices:s") else Seq.empty),
   libraryDependencies ++= Seq(
     Dependencies.scalaLogging,
     Dependencies.slf4jApi,
