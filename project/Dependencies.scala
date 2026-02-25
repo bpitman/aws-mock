@@ -15,6 +15,8 @@ object Dependencies {
   val aws2KMS        = "software.amazon.awssdk"       % "kms"                % aws2
   val aws2S3         = "software.amazon.awssdk"       % "s3"                 % aws2
   val aws2SES        = "software.amazon.awssdk"       % "ses"                % aws2
+  val aws2SNS        = "software.amazon.awssdk"       % "sns"                % aws2
+  val lettuce         = "io.lettuce"                   % "lettuce-core"       % "6.5.5.RELEASE"
   val log4jApi       = "org.apache.logging.log4j"     % "log4j-api"          % log4j
   val log4jCore      = "org.apache.logging.log4j"     % "log4j-core"         % log4j
   val log4jSlf4j     = "org.apache.logging.log4j"     % "log4j-slf4j2-impl"  % log4j

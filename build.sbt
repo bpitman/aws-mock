@@ -7,6 +7,13 @@ ThisBuild / version := {
     val exitCode = cmd.!(logger)
     if (exitCode == 0) Some(out.toString.trim) else None
   }
+  def stripInit(v: String): String =
+    if (v.endsWith("-init")) v.dropRight(5) else v
+  def incrementPatch(v: String): String = {
+    val parts = v.split('.')
+    if (parts.length == 3) s"${parts(0)}.${parts(1)}.${parts(2).toInt + 1}"
+    else v
+  }
   val branch = "git rev-parse --abbrev-ref HEAD".!!.trim
   val commitTag = gitSilent("git describe --tags --exact-match HEAD")
   val lastTag = gitSilent("git describe --tags --abbrev=0")
@@ -16,18 +23,36 @@ ThisBuild / version := {
     fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"))
     fmt.format(new java.util.Date())
   }
-  val base = lastTag.getOrElse("0.0.0")
-  if (commitTag.isDefined) commitTag.get
-  else if (branch == "main" || branch == "HEAD") s"${base}-${timestamp}-${commit}"
-  else s"${base}-${branch}-${timestamp}-${commit}"
+  def snapshot(base: String): String =
+    s"$base-$branch-$timestamp-$commit-SNAPSHOT"
+
+  commitTag match {
+    case Some(tag) if tag.endsWith("-init") =>
+      snapshot(stripInit(tag))
+    case Some(tag) if branch == "main" =>
+      tag
+    case Some(tag) =>
+      snapshot(tag)
+    case None =>
+      lastTag match {
+        case Some(tag) if tag.endsWith("-init") =>
+          snapshot(stripInit(tag))
+        case Some(tag) =>
+          snapshot(incrementPatch(tag))
+        case None =>
+          snapshot("0.0.0")
+      }
+  }
 }
 
 lazy val root = (project in file("."))
-  .aggregate(dynamodb, kms, ses, s3)
+  .aggregate(dynamodb, kms, ses, sns, s3, redis)
   .settings(
-    name := "aws-mock",
+    name := "mock-clients",
     publish / skip := true
   )
+
+val noSnapshotDeps = taskKey[Unit]("Fail if release build has SNAPSHOT dependencies")
 
 lazy val commonSettings = Seq(
   scalaVersion := "3.8.1",
@@ -42,13 +67,24 @@ lazy val commonSettings = Seq(
     Dependencies.log4jSlf4j     % Test,
     Dependencies.munit          % Test
   ),
-  testFrameworks += new TestFramework("munit.Framework")
+  testFrameworks += new TestFramework("munit.Framework"),
+  noSnapshotDeps := {
+    if (!isSnapshot.value) {
+      val snapshots = libraryDependencies.value.filter(_.revision.endsWith("-SNAPSHOT"))
+      if (snapshots.nonEmpty) {
+        val desc = snapshots.map(d => s"  ${d.organization}:${d.name}:${d.revision}").mkString("\n")
+        sys.error(s"Release build ${version.value} has SNAPSHOT dependencies:\n$desc")
+      }
+    }
+  },
+  publish := (publish dependsOn noSnapshotDeps).value,
+  publishLocal := (publishLocal dependsOn noSnapshotDeps).value
 )
 
 lazy val dynamodb = (project in file("dynamodb"))
   .settings(commonSettings)
   .settings(
-    name := "aws-mock-dynamodb",
+    name := "mock-clients-dynamodb",
     libraryDependencies ++= Seq(
       Dependencies.aws2DynamoDB
     )
@@ -57,7 +93,7 @@ lazy val dynamodb = (project in file("dynamodb"))
 lazy val kms = (project in file("kms"))
   .settings(commonSettings)
   .settings(
-    name := "aws-mock-kms",
+    name := "mock-clients-kms",
     libraryDependencies ++= Seq(
       Dependencies.aws2KMS
     )
@@ -66,17 +102,35 @@ lazy val kms = (project in file("kms"))
 lazy val ses = (project in file("ses"))
   .settings(commonSettings)
   .settings(
-    name := "aws-mock-ses",
+    name := "mock-clients-ses",
     libraryDependencies ++= Seq(
       Dependencies.aws2SES
+    )
+  )
+
+lazy val sns = (project in file("sns"))
+  .settings(commonSettings)
+  .settings(
+    name := "mock-clients-sns",
+    libraryDependencies ++= Seq(
+      Dependencies.aws2SNS
     )
   )
 
 lazy val s3 = (project in file("s3"))
   .settings(commonSettings)
   .settings(
-    name := "aws-mock-s3",
+    name := "mock-clients-s3",
     libraryDependencies ++= Seq(
       Dependencies.aws2S3
+    )
+  )
+
+lazy val redis = (project in file("redis"))
+  .settings(commonSettings)
+  .settings(
+    name := "mock-clients-redis",
+    libraryDependencies ++= Seq(
+      Dependencies.lettuce
     )
   )

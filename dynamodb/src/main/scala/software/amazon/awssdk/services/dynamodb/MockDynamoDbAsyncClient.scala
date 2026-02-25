@@ -75,9 +75,15 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
   type Names = Map[String,String]
   type Values = Map[String,AttributeValue]
   type Cache = ConcurrentHashMap[Key,Values]
+  case class GsiInfo(
+    keySchema: List[KeySchemaElement],
+    index: ConcurrentHashMap[Key, ConcurrentHashMap[Key, Values]]
+  )
+
   case class TableData(
     metadata: TableMetadata,
-    cache: Cache
+    cache: Cache,
+    gsis: ConcurrentHashMap[String, GsiInfo]
   )
 
   import MockUtil._
@@ -102,6 +108,54 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
   logger.info("Created mock DynamoDbAsyncClient")
 
   val tables = new ConcurrentHashMap[String,TableData]()
+
+  private def gsiKey(item: Values, keySchema: List[KeySchemaElement]): Option[Key] = {
+    val keys = keySchema.flatMap(k => item.get(k.attributeName))
+    if (keys.size == keySchema.size) Some(keys) else None
+  }
+
+  private def indexItem(data: TableData, primaryKey: Key, item: Values): Unit = {
+    data.gsis.asScala.foreach { case (_, gsi) =>
+      gsiKey(item, gsi.keySchema).foreach { gk =>
+        gsi.index.computeIfAbsent(gk, _ => new ConcurrentHashMap()).put(primaryKey, item)
+      }
+    }
+  }
+
+  private def unindexItem(data: TableData, primaryKey: Key, item: Values): Unit = {
+    data.gsis.asScala.foreach { case (_, gsi) =>
+      gsiKey(item, gsi.keySchema).foreach { gk =>
+        val bucket = gsi.index.get(gk)
+        if (bucket != null) {
+          bucket.remove(primaryKey)
+          if (bucket.isEmpty) gsi.index.remove(gk)
+        }
+      }
+    }
+  }
+
+  private def extractGsiKey(
+    condition: String,
+    keySchema: List[KeySchemaElement],
+    attrNames: Names,
+    attrValues: Values
+  ): Option[Key] = {
+    val hashAttr = keySchema.find(_.keyTypeAsString == "HASH").map(_.attributeName)
+    val rangeAttr = keySchema.find(_.keyTypeAsString == "RANGE").map(_.attributeName)
+    condition match {
+      case condSimple(op1, "=", op2) =>
+        val attrName = if (op1.startsWith("#")) attrNames.getOrElse(op1, op1) else op1
+        if (hashAttr.contains(attrName) || rangeAttr.contains(attrName))
+          attrValues.get(op2).map(v => List(v))
+        else None
+      case condAnd(c1, c2) =>
+        for {
+          k1 <- extractGsiKey(c1, keySchema, attrNames, attrValues)
+          k2 <- extractGsiKey(c2, keySchema, attrNames, attrValues)
+        } yield k1 ++ k2
+      case _ => None
+    }
+  }
 
   def close(): Unit = {}
 
@@ -316,18 +370,19 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
 
   private def doAction(item: Delete): Unit = {
     val (data, key) = dataKey(item)
-    if (!data.cache.containsKey(key)) {
-      throw new IllegalArgumentException(s"Key does not exist: ${item.tableName}/${key}")
+    val old = data.cache.get(key)
+    if (old != null) {
+      unindexItem(data, key, old)
+      data.cache.remove(key)
     }
-    data.cache.remove(key)
   }
 
   private def doAction(item: Put): Unit = {
     val (data, key) = dataKey(item)
-    if (data.cache.containsKey(key)) {
-      throw new IllegalArgumentException(s"Key already exists: ${item.tableName}/${key}")
-    }
-    data.cache.put(key, item.item().asScala.toMap)
+    Option(data.cache.get(key)).foreach(old => unindexItem(data, key, old))
+    val items = item.item().asScala.toMap
+    data.cache.put(key, items)
+    indexItem(data, key, items)
   }
 
   private def doAction(item: Update): Unit = {
@@ -384,7 +439,9 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
             throw new IllegalArgumentException(s"Attribute does not exist: [${k}]")
           }
         })
+        unindexItem(data, key, values)
         data.cache.put(key, items.toMap)
+        indexItem(data, key, items.toMap)
       }
       case _ => {
         throw new IllegalArgumentException(s"Unknown update expression: [${item.updateExpression}]")
@@ -392,14 +449,24 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
     }
   }
 
-  private def tableDescription(metadata: TableMetadata): TableDescription = {
-    TableDescription.builder()
-      .tableName(metadata.name)
-      .creationDateTime(metadata.creationDateTime)
-      .keySchema(metadata.keySchema.asJava)
-      .attributeDefinitions(metadata.attributeDefinitions.asJava)
-      .provisionedThroughput(metadata.provisionedThroughput)
-      .build()
+  private def tableDescription(data: TableData): TableDescription = {
+    val builder = TableDescription.builder()
+      .tableName(data.metadata.name)
+      .creationDateTime(data.metadata.creationDateTime)
+      .keySchema(data.metadata.keySchema.asJava)
+      .attributeDefinitions(data.metadata.attributeDefinitions.asJava)
+      .provisionedThroughput(data.metadata.provisionedThroughput)
+    val gsiDescriptions = data.gsis.asScala.map { case (name, gsi) =>
+      GlobalSecondaryIndexDescription.builder()
+        .indexName(name)
+        .keySchema(gsi.keySchema.asJava)
+        .projection(Projection.builder().projectionType(ProjectionType.ALL).build())
+        .build()
+    }.toList
+    if (gsiDescriptions.nonEmpty) {
+      builder.globalSecondaryIndexes(gsiDescriptions.asJava)
+    }
+    builder.build()
   }
 
   def createTable(request: CreateTableRequest): CompletableFuture[CreateTableResponse] = {
@@ -419,13 +486,21 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
             .numberOfDecreasesToday(0)
             .build()
         )
-        if (tables.putIfAbsent(request.tableName, TableData(metadata, new Cache())) != null) {
+        val gsis = new ConcurrentHashMap[String, GsiInfo]()
+        Option(request.globalSecondaryIndexes).foreach(_.asScala.foreach { gsi =>
+          gsis.put(gsi.indexName, GsiInfo(
+            gsi.keySchema.asScala.toList,
+            new ConcurrentHashMap()
+          ))
+        })
+        val tableData = TableData(metadata, new Cache(), gsis)
+        if (tables.putIfAbsent(request.tableName, tableData) != null) {
           throw ResourceInUseException.builder()
             .message(s"Table ${request.tableName} already exists")
             .build()
         }
         logger.info(s"Created table [${request.tableName}]")
-        CreateTableResponse.builder().tableDescription(tableDescription(metadata)).build()
+        CreateTableResponse.builder().tableDescription(tableDescription(tableData)).build()
       }
     })
   }
@@ -439,7 +514,7 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
             .message(s"Table ${request.tableName} does not exist")
             .build()
         }
-        DescribeTableResponse.builder().table(tableDescription(data.metadata)).build()
+        DescribeTableResponse.builder().table(tableDescription(data)).build()
       }
     })
   }
@@ -496,8 +571,82 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
         })
         val key = data.metadata.key(items, false)
         logger.info(s"Saving item: ${key} -> ${items}")
+        Option(data.cache.get(key)).foreach(old => unindexItem(data, key, old))
         data.cache.put(key, items)
+        indexItem(data, key, items)
         PutItemResponse.builder().build()
+      }
+    })
+  }
+
+  def updateItem(request: UpdateItemRequest): CompletableFuture[UpdateItemResponse] = {
+    CompletableFuture.supplyAsync(new Supplier[UpdateItemResponse]() {
+      override def get(): UpdateItemResponse = {
+        val data = tables.get(request.tableName)
+        if (data == null) {
+          throw ResourceNotFoundException.builder()
+            .message(s"Table ${request.tableName} does not exist")
+            .build()
+        }
+        val key = data.metadata.key(request.key().asScala.toMap)
+        val values = data.cache.get(key)
+        if (values == null) {
+          throw ResourceNotFoundException.builder()
+            .message(s"Item not found [${key}]")
+            .build()
+        }
+        val names = Option(request.expressionAttributeNames).map(_.asScala.toMap).getOrElse(Map.empty)
+        val attrValues = Option(request.expressionAttributeValues).map(_.asScala.toMap).getOrElse(Map.empty)
+        Option(request.conditionExpression).foreach { cond =>
+          if (!conditionCheck(values, cond, names, attrValues)) {
+            throw ConditionalCheckFailedException.builder()
+              .message("The conditional request failed")
+              .build()
+          }
+        }
+        request.updateExpression match {
+          case updateExpr(setCmd, setExpr, removeCmd, removeExpr) =>
+            val items = scala.collection.mutable.Map.from(values)
+            Option(setExpr).map(_.split(", ")).toList.flatten.foreach({
+              case setSimple(n, v) =>
+                val attr = attrValues.get(v).orNull
+                if (attr == null) {
+                  throw new IllegalArgumentException(s"Attribute does not exist: [${v}]")
+                }
+                val resolvedKey = n match {
+                  case v if v.startsWith("#") =>
+                    names.getOrElse(v, throw new IllegalArgumentException(s"Name is not defined [${v}]"))
+                  case v => v
+                }
+                items += resolvedKey -> attr
+              case setComplex(n, op1, func, op2) =>
+                val resolvedKey = n match {
+                  case v if v.startsWith("#") =>
+                    names.getOrElse(v, throw new IllegalArgumentException(s"Name is not defined [${v}]"))
+                  case v => v
+                }
+                val v1 = operandToAny(op1, values, names, attrValues)
+                val v2 = operandToAny(op2, values, names, attrValues)
+                val attr = (v1, v2) match {
+                  case (a: Long, b: Long) => nAttr({ if (func == "+") a + b else a - b })
+                  case (a: Double, b: Double) => nAttr({ if (func == "+") a + b else a - b })
+                  case (a, b) => throw new IllegalArgumentException(s"Expected numbers [${a},${b}]")
+                }
+                items += resolvedKey -> attr
+              case other =>
+                throw new IllegalArgumentException(s"Unknown update expression: [${request.updateExpression}]")
+            })
+            Option(removeExpr).map(_.split(", ")).toList.flatten.foreach(k => {
+              items.remove(k)
+            })
+            unindexItem(data, key, values)
+            data.cache.put(key, items.toMap)
+            indexItem(data, key, items.toMap)
+          case _ =>
+            throw new IllegalArgumentException(s"Unknown update expression: [${request.updateExpression}]")
+        }
+        logger.info(s"Updated item: ${key}")
+        UpdateItemResponse.builder().build()
       }
     })
   }
@@ -511,16 +660,27 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
             .message(s"Table ${request.tableName} does not exist")
             .build()
         }
+        val names = request.expressionAttributeNames().asScala.toMap
+        val values = request.expressionAttributeValues().asScala.toMap
         val order = if (request.scanIndexForward) 1 else -1
-        val items = data.cache.asScala.toList.sortWith((a, b) => order * lCompare(a._1, b._1) < 0)
-        .map(_._2).filter(values => {
-          conditionCheck(
-            values,
-            request.keyConditionExpression(),
-            request.expressionAttributeNames().asScala.toMap,
-            request.expressionAttributeValues().asScala.toMap
-          )
-        })
+        val items = Option(request.indexName).flatMap(n => Option(data.gsis.get(n))) match {
+          case Some(gsi) =>
+            extractGsiKey(request.keyConditionExpression, gsi.keySchema, names, values) match {
+              case Some(gk) =>
+                Option(gsi.index.get(gk))
+                  .map(_.values.asScala.toList)
+                  .getOrElse(List.empty)
+              case None =>
+                throw new IllegalArgumentException(
+                  s"Cannot extract key from condition: ${request.keyConditionExpression}"
+                )
+            }
+          case None =>
+            data.cache.asScala.toList
+              .sortWith((a, b) => order * lCompare(a._1, b._1) < 0)
+              .map(_._2)
+              .filter(v => conditionCheck(v, request.keyConditionExpression(), names, values))
+        }
         QueryResponse.builder().items(items.map(_.asJava).toList.asJava).build()
       }
     })
@@ -555,46 +715,42 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
     CompletableFuture.supplyAsync(new Supplier[TransactWriteItemsResponse]() {
       override def get(): TransactWriteItemsResponse = {
         val items = request.transactItems().asScala
-        val reasons = new java.util.ArrayList[CancellationReason]()
-        try {
-          val ids = items.map(item => {
-            List(
-              Option(item.conditionCheck).map(dataKey),
-              Option(item.delete).map(dataKey),
-              Option(item.put).map(dataKey),
-              Option(item.update).map(dataKey),
-            ).flatten.map(v => v._1.metadata.name -> v._2)
-          })
-          if (ids.size != ids.distinct.size) {
-            throw new IllegalArgumentException(s"Accessing duplicate item [${ids}]")
-          }
-          if (items.forall(item => {
-            reasons.add(CancellationReason.builder.message(s"doConditionCheck: ${item}").build)
+        val ids = items.map(item => {
+          List(
+            Option(item.conditionCheck).map(dataKey),
+            Option(item.delete).map(dataKey),
+            Option(item.put).map(dataKey),
+            Option(item.update).map(dataKey),
+          ).flatten.map(v => v._1.metadata.name -> v._2)
+        })
+        if (ids.size != ids.distinct.size) {
+          throw new IllegalArgumentException(s"Accessing duplicate item [${ids}]")
+        }
+        val reasons = items.map { item =>
+          val passed =
             Option(item.conditionCheck).map(doConditionCheck).getOrElse(true) &&
             Option(item.delete).map(doConditionCheck).getOrElse(true) &&
             Option(item.put).map(doConditionCheck).getOrElse(true) &&
             Option(item.update).map(doConditionCheck).getOrElse(true)
-          })) {
-            items.foreach(item => {
-              reasons.add(CancellationReason.builder.message(s"doAction: ${item}").build)
-              Option(item.delete).foreach(doAction)
-              Option(item.put).foreach(doAction)
-              Option(item.update).foreach(doAction)
-            })
-            TransactWriteItemsResponse.builder().build()
-          }
-          else {
-            throw new IllegalArgumentException(s"doConditionCheck failed [${reasons.asScala.last}]")
-          }
+          if (passed)
+            CancellationReason.builder.code("None").build
+          else
+            CancellationReason.builder.code("ConditionalCheckFailed")
+              .message("The conditional request failed").build
         }
-        catch {
-          case NonFatal(t) => {
-            logger.error(s"transactWriteItems failed: ${t}")
-            throw TransactionCanceledException.builder()
-              .message("The conditional request failed.")
-              .cancellationReasons(reasons)
-              .build()
+        if (reasons.forall(_.code == "None")) {
+          items.foreach { item =>
+            Option(item.delete).foreach(doAction)
+            Option(item.put).foreach(doAction)
+            Option(item.update).foreach(doAction)
           }
+          TransactWriteItemsResponse.builder().build()
+        }
+        else {
+          throw TransactionCanceledException.builder()
+            .message("Transaction cancelled, precondition not satisfied.")
+            .cancellationReasons(reasons.asJava)
+            .build()
         }
       }
     })
@@ -604,13 +760,14 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
     CompletableFuture.supplyAsync(new Supplier[UpdateTableResponse]() {
       override def get(): UpdateTableResponse = {
         val data = tables.computeIfPresent(request.tableName, (k, v) => {
-          val now = clock.instant()
-          val oldPt = v.metadata.provisionedThroughput
-          val newPt = request.provisionedThroughput
-          val isIncrease = oldPt.readCapacityUnits + oldPt.writeCapacityUnits <
-                           newPt.readCapacityUnits + newPt.writeCapacityUnits
-          v.copy(metadata = {
-            v.metadata.copy(provisionedThroughput = {
+          var result = v
+
+          Option(request.provisionedThroughput).foreach { newPt =>
+            val now = clock.instant()
+            val oldPt = result.metadata.provisionedThroughput
+            val isIncrease = oldPt.readCapacityUnits + oldPt.writeCapacityUnits <
+                             newPt.readCapacityUnits + newPt.writeCapacityUnits
+            result = result.copy(metadata = result.metadata.copy(provisionedThroughput =
               ProvisionedThroughputDescription.builder()
                 .readCapacityUnits(newPt.readCapacityUnits)
                 .writeCapacityUnits(newPt.writeCapacityUnits)
@@ -618,15 +775,40 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
                 .lastIncreaseDateTime(if (isIncrease) now else oldPt.lastIncreaseDateTime)
                 .numberOfDecreasesToday(oldPt.numberOfDecreasesToday + { if (isIncrease) 0 else 1 })
                 .build()
-            })
+            ))
+          }
+
+          Option(request.globalSecondaryIndexUpdates).foreach(_.asScala.foreach { update =>
+            Option(update.create).foreach { create =>
+              val gsiInfo = GsiInfo(
+                create.keySchema.asScala.toList,
+                new ConcurrentHashMap()
+              )
+              result.gsis.put(create.indexName, gsiInfo)
+              // Backfill existing items into the new index
+              result.cache.asScala.foreach { case (pk, item) =>
+                gsiKey(item, gsiInfo.keySchema).foreach { gk =>
+                  gsiInfo.index.computeIfAbsent(gk, _ => new ConcurrentHashMap()).put(pk, item)
+                }
+              }
+              logger.info(s"Created GSI [${create.indexName}] on table [${request.tableName}]")
+            }
           })
+
+          Option(request.attributeDefinitions).foreach { defs =>
+            result = result.copy(metadata = result.metadata.copy(
+              attributeDefinitions = defs.asScala.toList
+            ))
+          }
+
+          result
         })
         if (data == null) {
           throw ResourceNotFoundException.builder()
             .message(s"Table ${request.tableName} does not exist")
             .build()
         }
-        UpdateTableResponse.builder().tableDescription(tableDescription(data.metadata)).build()
+        UpdateTableResponse.builder().tableDescription(tableDescription(data)).build()
       }
     })
   }
