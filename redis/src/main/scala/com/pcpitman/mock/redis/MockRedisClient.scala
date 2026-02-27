@@ -26,8 +26,8 @@ object MockRedisClient {
     val handler = new InvocationHandler() {
       override def invoke(proxy: Object, method: Method, args: Array[Any]): Any = {
         try {
-          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes: _*)
-          if (args == null) m.invoke(mock) else m.invoke(mock, args: _*)
+          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes*)
+          if (args == null) m.invoke(mock) else m.invoke(mock, args*)
         } catch {
           case e: NoSuchMethodException =>
             throw new UnsupportedOperationException(s"Mock ${method.getName()} not implemented")
@@ -80,8 +80,8 @@ class MockRedisClient extends LazyLogging {
           case "await"                => java.lang.Boolean.TRUE
           case "toCompletableFuture"  => cf
           case _ =>
-            val m = cf.getClass().getMethod(method.getName(), method.getParameterTypes: _*)
-            if (args == null) m.invoke(cf) else m.invoke(cf, args: _*)
+            val m = cf.getClass().getMethod(method.getName(), method.getParameterTypes*)
+            if (args == null) m.invoke(cf) else m.invoke(cf, args*)
         }
       }
     }

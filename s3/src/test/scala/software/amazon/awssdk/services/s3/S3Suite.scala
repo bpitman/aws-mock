@@ -6,8 +6,8 @@ import java.util.concurrent.TimeUnit
 
 import munit.FunSuite
 
-import software.amazon.awssdk.core.async._
-import software.amazon.awssdk.services.s3.model._
+import software.amazon.awssdk.core.async.*
+import software.amazon.awssdk.services.s3.model.*
 
 class S3Suite extends FunSuite {
 

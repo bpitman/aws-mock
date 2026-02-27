@@ -1,13 +1,13 @@
 package software.amazon.awssdk.services.dynamodb
 
-import scala.jdk.CollectionConverters._
+import scala.jdk.CollectionConverters.*
 
 import java.time.Clock
 import java.util.concurrent.TimeUnit
 
 import munit.FunSuite
 
-import software.amazon.awssdk.services.dynamodb.model._
+import software.amazon.awssdk.services.dynamodb.model.*
 
 class DynamoDbSuite extends FunSuite {
 

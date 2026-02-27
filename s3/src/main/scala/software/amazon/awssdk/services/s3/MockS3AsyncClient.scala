@@ -1,6 +1,6 @@
 package software.amazon.awssdk.services.s3
 
-import scala.jdk.CollectionConverters._
+import scala.jdk.CollectionConverters.*
 
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -18,7 +18,7 @@ import com.typesafe.scalalogging.Logger
 
 import software.amazon.awssdk.core.async.AsyncRequestBody
 import software.amazon.awssdk.core.async.AsyncResponseTransformer
-import software.amazon.awssdk.services.s3.model._
+import software.amazon.awssdk.services.s3.model.*
 
 object MockS3AsyncClient extends LazyLogging {
   def newProxy(clock: Clock): S3AsyncClient = {
@@ -28,8 +28,8 @@ object MockS3AsyncClient extends LazyLogging {
 
       override def invoke(proxy: Object, method: Method, args: Array[Any]): Any = {
         try {
-          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes: _*)
-          if (args == null) m.invoke(mock) else m.invoke(mock, args: _*)
+          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes*)
+          if (args == null) m.invoke(mock) else m.invoke(mock, args*)
         }
         catch {
           case e: NoSuchMethodException => {

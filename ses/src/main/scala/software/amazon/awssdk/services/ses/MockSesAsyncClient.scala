@@ -9,7 +9,7 @@ import java.util.function.Supplier
 
 import com.typesafe.scalalogging.LazyLogging
 
-import software.amazon.awssdk.services.ses.model._
+import software.amazon.awssdk.services.ses.model.*
 
 object MockSesAsyncClient {
   def newProxy(clock: Clock): SesAsyncClient = {
@@ -19,8 +19,8 @@ object MockSesAsyncClient {
 
       override def invoke(proxy: Object, method: Method, args: Array[Any]): Any = {
         try {
-          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes: _*)
-          if (args == null) m.invoke(mock) else m.invoke(mock, args: _*)
+          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes*)
+          if (args == null) m.invoke(mock) else m.invoke(mock, args*)
         }
         catch {
           case e: NoSuchMethodException => {

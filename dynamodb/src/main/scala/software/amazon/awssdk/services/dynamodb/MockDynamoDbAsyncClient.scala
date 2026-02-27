@@ -1,6 +1,6 @@
 package software.amazon.awssdk.services.dynamodb
 
-import scala.jdk.CollectionConverters._
+import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
 import java.lang.reflect.InvocationHandler
@@ -15,8 +15,8 @@ import java.util.function.Supplier
 
 import com.typesafe.scalalogging.LazyLogging
 
-import software.amazon.awssdk.services.dynamodb.model._
-import software.amazon.awssdk.services.dynamodb.paginators._
+import software.amazon.awssdk.services.dynamodb.model.*
+import software.amazon.awssdk.services.dynamodb.paginators.*
 
 object MockDynamoDbAsyncClient {
   def newProxy(clock: Clock): DynamoDbAsyncClient = {
@@ -26,8 +26,8 @@ object MockDynamoDbAsyncClient {
 
       override def invoke(proxy: Object, method: Method, args: Array[Any]): Any = {
         try {
-          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes: _*)
-          if (args == null) m.invoke(mock) else m.invoke(mock, args: _*)
+          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes*)
+          if (args == null) m.invoke(mock) else m.invoke(mock, args*)
         }
         catch {
           case e: NoSuchMethodException => {
@@ -86,7 +86,7 @@ class MockDynamoDbAsyncClient(clock: Clock) extends LazyLogging {
     gsis: ConcurrentHashMap[String, GsiInfo]
   )
 
-  import MockUtil._
+  import MockUtil.*
 
   val proxyRef = new AtomicReference[DynamoDbAsyncClient]()
   def withProxy(proxy: DynamoDbAsyncClient): Unit = proxyRef.set(proxy)

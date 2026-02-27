@@ -1,6 +1,6 @@
 package software.amazon.awssdk.services.dynamodb
 
-import scala.jdk.CollectionConverters._
+import scala.jdk.CollectionConverters.*
 
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.util.SdkAutoConstructList

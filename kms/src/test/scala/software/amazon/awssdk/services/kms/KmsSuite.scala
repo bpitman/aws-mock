@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 import munit.FunSuite
 
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kms.model._
+import software.amazon.awssdk.services.kms.model.*
 
 class KmsSuite extends FunSuite {
 

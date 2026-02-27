@@ -3,7 +3,7 @@ package software.amazon.awssdk.services.dynamodb
 import munit.FunSuite
 
 class MockUtilSuite extends FunSuite {
-  import MockUtil._
+  import MockUtil.*
 
   test("s") {
     val attr = sAttr("test")

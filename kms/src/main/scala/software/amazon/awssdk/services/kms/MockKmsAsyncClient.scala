@@ -17,7 +17,7 @@ import javax.crypto.spec.SecretKeySpec
 import com.typesafe.scalalogging.LazyLogging
 
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kms.model._
+import software.amazon.awssdk.services.kms.model.*
 
 object MockKmsAsyncClient {
   def newProxy(clock: Clock): KmsAsyncClient = {
@@ -27,8 +27,8 @@ object MockKmsAsyncClient {
 
       override def invoke(proxy: Object, method: Method, args: Array[Any]): Any = {
         try {
-          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes: _*)
-          if (args == null) m.invoke(mock) else m.invoke(mock, args: _*)
+          val m = mock.getClass().getMethod(method.getName(), method.getParameterTypes*)
+          if (args == null) m.invoke(mock) else m.invoke(mock, args*)
         }
         catch {
           case e: NoSuchMethodException => {
