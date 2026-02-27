@@ -33,13 +33,13 @@ jobs:
       - uses: sbt/setup-sbt@v1
 
       - name: Compile
-        run: sbt +compile
+        run: sbt compile
 
       - name: Test
-        run: sbt +test
+        run: sbt test
 
       - name: Package
-        run: sbt +package
+        run: sbt package
 
       - uses: actions/upload-artifact@v4
         with:
@@ -51,7 +51,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
-        run: sbt '; +dynamodb/publish; +kms/publish; +ses/publish; +sns/publish; +s3/publish; +redis/publish'
+        run: sbt '; dynamodb/publish; kms/publish; ses/publish; sns/publish; s3/publish; redis/publish'
 
       - name: Create release and upload assets
         if: startsWith(github.ref, 'refs/tags/')
